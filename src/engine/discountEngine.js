@@ -172,3 +172,97 @@ export function processCart(cartItems, rules) {
 export function cartTotal(results) {
   return results.reduce((sum, r) => sum + r.finalPrice, 0)
 }
+
+
+/**
+ * Filters rules that have scope === 'cart'.
+ * Cart rules apply to the entire cart total, not individual items.
+ */
+export function getCartRules(rules) {
+  return rules.filter((r) => r.scope === 'cart')
+}
+
+
+/**
+ * Returns true if the cart rule's condition is satisfied.
+ * Currently only supports min cart value conditions.
+ *
+ * Example: if rule.minCartValue = 4000 and cartTotalPrice = 5932,
+ * this returns true.
+ */
+export function cartRuleConditionMet(cartTotalPrice, rule) {
+  // If the rule has a minCartValue condition, check it
+  if (rule.minCartValue !== undefined && rule.minCartValue !== null) {
+    return cartTotalPrice >= rule.minCartValue
+  }
+  // If no condition is specified, the rule always applies
+  return true
+}
+
+
+/**
+ * Calculates the rupee discount a cart rule gives on the cart total.
+ * Similar to calculateDiscountAmount but operates on the full cart price.
+ */
+export function calculateCartDiscount(cartTotalPrice, rule) {
+  if (rule.type === 'percentage') {
+    return Math.round(cartTotalPrice * rule.value / 100)
+  }
+  if (rule.type === 'flat') {
+    return rule.value
+  }
+  return 0
+}
+
+
+/**
+ * Evaluates all cart-level rules against the current cart total.
+ * Returns an object describing which cart offer was applied (if any).
+ *
+ * Returns:
+ * {
+ *   applied: true/false,
+ *   ruleId: string or null,
+ *   discountAmount: number (rupees saved),
+ *   reasoning: string,
+ *   finalTotal: number (cart total after cart discount)
+ * }
+ */
+export function applyCartOffer(cartTotalPrice, cartRules) {
+  // Filter to cart rules that satisfy their conditions
+  const eligibleRules = cartRules.filter((r) =>
+    cartRuleConditionMet(cartTotalPrice, r)
+  )
+
+  // No cart rules apply
+  if (eligibleRules.length === 0) {
+    return {
+      applied: false,
+      ruleId: null,
+      discountAmount: 0,
+      reasoning: '',
+      finalTotal: cartTotalPrice,
+    }
+  }
+
+  // If multiple cart rules could apply, pick the one with the largest discount
+  // (same logic as non-stackable item rules)
+  const sorted = [...eligibleRules].sort(
+    (a, b) =>
+      calculateCartDiscount(cartTotalPrice, b) -
+      calculateCartDiscount(cartTotalPrice, a)
+  )
+  const winner = sorted[0]
+  const discountAmount = calculateCartDiscount(cartTotalPrice, winner)
+
+  return {
+    applied: true,
+    ruleId: winner.ruleId,
+    discountAmount,
+    reasoning:
+      winner.type === 'percentage'
+        ? `Cart offer: ${winner.value}% off`
+        : `Cart offer: Rs.${winner.value} off`,
+    finalTotal: Math.round(cartTotalPrice - discountAmount),
+  }
+}

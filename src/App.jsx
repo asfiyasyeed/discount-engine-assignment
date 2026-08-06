@@ -10,7 +10,7 @@ import CsvUploader from './components/CsvUploader.jsx'
 import DataTable from './components/DataTable.jsx'
 import ErrorBanner from './components/ErrorBanner.jsx'
 import { parseRulesCSV, parseCartCSV } from './engine/csvParser.js'
-import { processCart, cartTotal } from './engine/discountEngine.js'
+import { processCart, cartTotal, getCartRules, applyCartOffer } from './engine/discountEngine.js'
 
 // ── Column definitions ───────────────────────────────────────────
 
@@ -134,9 +134,27 @@ export default function App() {
   }
 
   function handleCalculate() {
-    const res = processCart(cartItems, rules)
-    setResults(res)
-  }
+  const itemResults = processCart(cartItems, rules)
+  const itemsTotal = cartTotal(itemResults)
+  
+  // Get cart-level rules and apply them
+  const cartRules = getCartRules(rules)
+  const cartOffer = applyCartOffer(itemsTotal, cartRules)
+  
+  // DEBUG: Log what we're getting
+  console.log('All rules:', rules)
+  console.log('Cart rules:', cartRules)
+  console.log('Items total:', itemsTotal)
+  console.log('Cart offer result:', cartOffer)
+  
+  setResults({
+    items: itemResults,
+    itemsTotal: itemsTotal,
+    cartOffer: cartOffer,
+    finalTotal: cartOffer.finalTotal,
+  })
+}
+
 
   const canCalculate = rules.length > 0 && cartItems.length > 0
 
@@ -217,10 +235,50 @@ export default function App() {
         {results && (
           <div style={S.section}>
             <div style={S.sectionTitle}>Cart Summary</div>
-            <DataTable columns={RESULTS_COLUMNS} rows={results} />
+            <DataTable columns={RESULTS_COLUMNS} rows={results.items} />
+            
+            {/* Cart Total (before cart offer) */}
             <div style={S.totalRow}>
               <span style={S.totalLabel}>Cart Total</span>
-              <span style={S.totalValue}>Rs.{cartTotal(results).toLocaleString('en-IN')}</span>
+              <span style={S.totalValue}>Rs.{results.itemsTotal.toLocaleString('en-IN')}</span>
+            </div>
+
+            {/* Cart Offer Row (only show if applied) */}
+            {results.cartOffer.applied && (
+              <div style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: '1rem',
+                marginTop: '0.5rem',
+                paddingTop: '0.5rem',
+                borderTop: '1px solid #CECECE',
+              }}>
+                <span style={{ fontSize: 12, color: '#1e5c2c', fontWeight: 600 }}>
+                  {results.cartOffer.reasoning} — Rs.{results.cartOffer.discountAmount.toLocaleString('en-IN')} saved
+                </span>
+              </div>
+            )}
+
+            {/* Final Cart Total (after cart offer) */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              alignItems: 'center',
+              gap: '1rem',
+              marginTop: '0.75rem',
+              paddingTop: '0.75rem',
+              borderTop: '2px solid #131A48',
+              background: results.cartOffer.applied ? '#f0f8f4' : 'transparent',
+              padding: results.cartOffer.applied ? '0.75rem' : '0',
+              borderRadius: results.cartOffer.applied ? 4 : 0,
+            }}>
+              <span style={{...S.totalLabel, color: results.cartOffer.applied ? '#1e5c2c' : '#131A48'}}>
+                {results.cartOffer.applied ? 'Final Cart Total' : 'Cart Total'}
+              </span>
+              <span style={{...S.totalValue, color: results.cartOffer.applied ? '#1e5c2c' : '#131A48'}}>
+                Rs.{results.finalTotal.toLocaleString('en-IN')}
+              </span>
             </div>
           </div>
         )}
