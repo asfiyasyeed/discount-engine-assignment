@@ -16,7 +16,7 @@ export async function parsePdfCart(file) {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      
+
       // Group text items by Y coordinate to preserve actual line structure
       const linesMap = {};
       for (const item of textContent.items) {
@@ -38,8 +38,17 @@ export async function parsePdfCart(file) {
       }
     }
 
-    const cartItems = parseCartTable(fullText);
-    return cartItems;
+    const { items, skippedRows } = parseCartTable(fullText);
+
+    if (items.length === 0) {
+      throw new Error(
+        skippedRows.length > 0
+          ? `No valid rows could be parsed. ${skippedRows.length} row(s) were malformed.`
+          : "No item rows were found in this PDF."
+      );
+    }
+
+    return { items, skippedRows };
   } catch (error) {
     throw new Error(`PDF parsing failed: ${error.message}`);
   }
@@ -48,7 +57,11 @@ export async function parsePdfCart(file) {
 function parseCartTable(text) {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   const cartItems = [];
+  const skippedRows = [];
   let itemId = 1;
+
+  const knownPlatforms = ["Amazon India", "Flipkart", "Noon", "Amazon", "Myntra"];
+  const knownBrands = ["Natura Casa", "LivSpace Pro", "Nordic Basics"];
 
   for (const line of lines) {
     // Skip headers
@@ -59,83 +72,86 @@ function parseCartTable(text) {
       continue;
     }
 
-    // Extract price at the end of the line
-    const priceMatch = line.match(/(?:rs\.?|₹|\$)?\s*([\d,]+)\s*$/i);
+    // Extract price at the end of the line. Explicitly capture an optional
+    // leading minus sign so negative prices are caught, not silently
+    // stripped to a positive number.
+    const priceMatch = line.match(/(?:rs\.?|₹|\$)?\s*(-?[\d,]+)\s*$/i);
 
-    if (priceMatch) {
-      const basePrice = parseInt(priceMatch[1].replace(/,/g, ""), 10);
+    if (!priceMatch) {
+      skippedRows.push({ line, reason: "No valid price found" });
+      continue;
+    }
 
-      if (!isNaN(basePrice) && basePrice > 0) {
-        const textBeforePrice = line.substring(0, priceMatch.index).trim();
-        
-        // Split by 2 or more spaces, tabs, or pipes
-        let parts = textBeforePrice.split(/\s{2,}|\t|\|/).map(p => p.trim()).filter(Boolean);
+    const basePrice = parseInt(priceMatch[1].replace(/,/g, ""), 10);
 
-        // Fallback for single-space separation
-        if (parts.length < 3) {
-          const knownPlatforms = ["Amazon India", "Flipkart", "Noon", "Amazon", "Myntra"];
-          let foundPlatform = "";
-          let remaining = textBeforePrice;
+    if (isNaN(basePrice) || basePrice <= 0) {
+      skippedRows.push({ line, reason: `Invalid price: "${priceMatch[1]}"` });
+      continue;
+    }
 
-          for (const plat of knownPlatforms) {
-            if (remaining.toLowerCase().endsWith(plat.toLowerCase())) {
-              foundPlatform = plat;
-              remaining = remaining.substring(0, remaining.length - plat.length).trim();
-              break;
-            }
-          }
+    const textBeforePrice = line.substring(0, priceMatch.index).trim();
 
-          if (foundPlatform) {
-            const knownBrands = ["Natura Casa", "LivSpace Pro", "Nordic Basics"];
-            let foundBrand = "";
-            let product = remaining;
+    if (!textBeforePrice) {
+      skippedRows.push({ line, reason: "No product/brand/platform text found" });
+      continue;
+    }
 
-            for (const b of knownBrands) {
-              if (remaining.toLowerCase().endsWith(b.toLowerCase())) {
-                foundBrand = b;
-                product = remaining.substring(0, remaining.length - b.length).trim();
-                break;
-              }
-            }
+    // Split by 2+ spaces, tabs, or pipes (matches table-formatted PDFs)
+    let parts = textBeforePrice.split(/\s{2,}|\t|\|/).map((p) => p.trim()).filter(Boolean);
 
-            if (foundBrand && product) {
-              parts = [product, foundBrand, foundPlatform];
-            } else {
-              const words = remaining.split(/\s+/);
-              if (words.length >= 2) {
-                foundBrand = words.pop();
-                product = words.join(" ");
-                parts = [product, foundBrand, foundPlatform];
-              }
-            }
-          }
-        }
+    // Fallback for single-space separation: only accept if platform AND
+    // brand are both confidently identified from known lists, and what's
+    // left over is a non-empty product name. We never guess a field by
+    // just grabbing "the last word" — that silently produces wrong data
+    // instead of failing loudly, which is worse in a pricing engine.
+    if (parts.length < 3) {
+      let remaining = textBeforePrice;
+      let foundPlatform = "";
+      let foundBrand = "";
 
-        if (parts.length >= 3) {
-          cartItems.push({
-            itemId: `PDF-ITEM-${itemId}`,
-            product: parts[0],
-            brand: parts[1],
-            platform: parts[2],
-            basePrice: basePrice,
-          });
-          itemId++;
+      for (const plat of knownPlatforms) {
+        if (remaining.toLowerCase().endsWith(plat.toLowerCase())) {
+          foundPlatform = plat;
+          remaining = remaining.slice(0, remaining.length - plat.length).trim();
+          break;
         }
       }
+
+      for (const b of knownBrands) {
+        if (remaining.toLowerCase().endsWith(b.toLowerCase())) {
+          foundBrand = b;
+          remaining = remaining.slice(0, remaining.length - b.length).trim();
+          break;
+        }
+      }
+
+      if (foundPlatform && foundBrand && remaining) {
+        parts = [remaining, foundBrand, foundPlatform];
+      } else {
+        skippedRows.push({
+          line,
+          reason: "Could not confidently identify product, brand, and platform",
+        });
+        continue;
+      }
     }
+
+    const [product, brand, platform] = parts;
+
+    if (!product || !brand || !platform) {
+      skippedRows.push({ line, reason: "One or more fields (product/brand/platform) missing" });
+      continue;
+    }
+
+    cartItems.push({
+      itemId: `PDF-ITEM-${itemId}`,
+      product,
+      brand,
+      platform,
+      basePrice,
+    });
+    itemId++;
   }
 
-  // Safety fallback so testing never gets blocked
-  if (cartItems.length === 0) {
-    return [
-      { itemId: 'PDF-ITEM-1', product: 'Cushion Cover', brand: 'Natura Casa', platform: 'Amazon India', basePrice: 1299 },
-      { itemId: 'PDF-ITEM-2', product: 'Bed Sheet Set', brand: 'Natura Casa', platform: 'Flipkart', basePrice: 849 },
-      { itemId: 'PDF-ITEM-3', product: 'Wall Shelf', brand: 'LivSpace Pro', platform: 'Amazon India', basePrice: 599 },
-      { itemId: 'PDF-ITEM-4', product: 'Ceramic Vase', brand: 'LivSpace Pro', platform: 'Noon', basePrice: 2499 },
-      { itemId: 'PDF-ITEM-5', product: 'Cutting Board', brand: 'Nordic Basics', platform: 'Amazon India', basePrice: 449 },
-      { itemId: 'PDF-ITEM-6', product: 'Desk Organiser', brand: 'Nordic Basics', platform: 'Flipkart', basePrice: 899 }
-    ];
-  }
-
-  return cartItems;
+  return { items: cartItems, skippedRows };
 }

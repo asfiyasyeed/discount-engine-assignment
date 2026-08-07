@@ -4,6 +4,7 @@ import { parsePdfCart } from "../engine/pdfParser.js"
 export default function PdfUploader({ onCartLoaded }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [warnings, setWarnings] = useState([])
 
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0]
@@ -15,11 +16,13 @@ export default function PdfUploader({ onCartLoaded }) {
     }
 
     setError("")
+    setWarnings([])
     setLoading(true)
 
     try {
-      const cartItems = await parsePdfCart(file)
-      onCartLoaded(cartItems)
+      const { items, skippedRows } = await parsePdfCart(file)
+      onCartLoaded(items)
+      setWarnings(skippedRows || [])
     } catch (err) {
       setError(`PDF parsing error: ${err.message}`)
     } finally {
@@ -55,6 +58,27 @@ export default function PdfUploader({ onCartLoaded }) {
           marginTop: '6px',
         }}>
           {error}
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div style={{
+          background: '#fff3cd',
+          border: '1px solid #ffeeba',
+          color: '#856404',
+          padding: '6px 12px',
+          borderRadius: 4,
+          fontSize: 12,
+          marginTop: '6px',
+        }}>
+          <div>{warnings.length} row(s) could not be parsed and were skipped.</div>
+          <details style={{ marginTop: '4px' }}>
+            <summary style={{ cursor: 'pointer' }}>Details</summary>
+            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+              {warnings.map((w, i) => (
+                <li key={i}>{w.reason}: "{w.line}"</li>
+              ))}
+            </ul>
+          </details>
         </div>
       )}
     </div>
