@@ -2,11 +2,13 @@
  * App.jsx
  *
  * Top-level component. Manages state for rules, cart items, and results.
- * Wires together CSV upload → parse → engine → display.
+ * Wires together CSV/PDF upload → parse → engine → display.
  */
 
 import { useState } from 'react'
 import CsvUploader from './components/CsvUploader.jsx'
+import PdfUploader from './components/PdfUploader.jsx'
+import NaturalLanguageRuleInput from './components/NaturalLanguageRuleInput.jsx'
 import DataTable from './components/DataTable.jsx'
 import ErrorBanner from './components/ErrorBanner.jsx'
 import { parseRulesCSV, parseCartCSV } from './engine/csvParser.js'
@@ -96,10 +98,6 @@ const S = {
   },
   totalLabel: { fontWeight: 700, fontSize: 14, color: '#131A48' },
   totalValue: { fontWeight: 700, fontSize: 16, color: '#131A48' },
-  tag: (color, bg) => ({
-    display: 'inline-block', fontSize: 10, fontWeight: 700, padding: '1px 6px',
-    borderRadius: 20, background: bg, color, textTransform: 'uppercase', letterSpacing: '0.04em',
-  }),
 }
 
 // ── Component ────────────────────────────────────────────────────
@@ -114,6 +112,7 @@ export default function App() {
   const [cartFileName, setCartFileName]   = useState('')
 
   const [results, setResults]       = useState(null)
+  const [generalError, setGeneralError] = useState('')
 
   // ── Handlers ──
 
@@ -133,28 +132,46 @@ export default function App() {
     setResults(null)
   }
 
-  function handleCalculate() {
-  const itemResults = processCart(cartItems, rules)
-  const itemsTotal = cartTotal(itemResults)
-  
-  // Get cart-level rules and apply them
-  const cartRules = getCartRules(rules)
-  const cartOffer = applyCartOffer(itemsTotal, cartRules)
-  
-  // DEBUG: Log what we're getting
-  console.log('All rules:', rules)
-  console.log('Cart rules:', cartRules)
-  console.log('Items total:', itemsTotal)
-  console.log('Cart offer result:', cartOffer)
-  
-  setResults({
-    items: itemResults,
-    itemsTotal: itemsTotal,
-    cartOffer: cartOffer,
-    finalTotal: cartOffer.finalTotal,
-  })
-}
+  function handlePdfCartLoaded(items) {
+    setCartItems(items)
+    setCartFileName('Uploaded PDF')
+    setResults(null)
+    setGeneralError('')
+  }
 
+  function handleRuleAdded(newRule) {
+    setRules([...rules, newRule])
+    // Auto-recalculate if cart items exist
+    if (cartItems.length > 0) {
+      handleCalculate([...rules, newRule])
+    }
+  }
+
+  function handleCalculate(rulesOverride = null) {
+    const rulesToUse = rulesOverride || rules
+
+    if (rulesToUse.length === 0 || cartItems.length === 0) {
+      setGeneralError('Please upload both rules and cart items.')
+      return
+    }
+
+    try {
+      const itemResults = processCart(cartItems, rulesToUse)
+      const itemsTotal = cartTotal(itemResults)
+      const cartRules = getCartRules(rulesToUse)
+      const cartOffer = applyCartOffer(itemsTotal, cartRules)
+
+      setResults({
+        items: itemResults,
+        itemsTotal: itemsTotal,
+        cartOffer: cartOffer,
+        finalTotal: cartOffer.finalTotal,
+      })
+      setGeneralError('')
+    } catch (err) {
+      setGeneralError(`Calculation error: ${err.message}`)
+    }
+  }
 
   const canCalculate = rules.length > 0 && cartItems.length > 0
 
@@ -170,6 +187,21 @@ export default function App() {
 
       <div style={S.main}>
 
+        {/* General Error Banner */}
+        {generalError && (
+          <div style={{
+            background: '#fff3cd',
+            border: '1px solid #ffc107',
+            color: '#856404',
+            padding: '12px 16px',
+            borderRadius: 4,
+            marginBottom: '1rem',
+            fontSize: 13,
+          }}>
+            {generalError}
+          </div>
+        )}
+
         {/* Upload row */}
         <div style={S.grid2}>
           {/* Rules upload */}
@@ -182,6 +214,12 @@ export default function App() {
               hasData={rules.length > 0}
               fileName={rulesFileName}
             />
+
+            {/* NEW: Natural Language Rule Input */}
+            <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #CECECE' }}>
+              <NaturalLanguageRuleInput onRuleAdded={handleRuleAdded} />
+            </div>
+
             <ErrorBanner errors={rulesErrors} />
             {rules.length > 0 && (
               <div style={{ marginTop: '0.75rem' }}>
@@ -203,6 +241,15 @@ export default function App() {
               hasData={cartItems.length > 0}
               fileName={cartFileName}
             />
+
+            {/* NEW: PDF Upload Option */}
+            <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #CECECE' }}>
+              <div style={{ fontSize: 11, color: '#888', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Or upload PDF
+              </div>
+              <PdfUploader onCartLoaded={handlePdfCartLoaded} />
+            </div>
+
             <ErrorBanner errors={cartErrors} />
             {cartItems.length > 0 && (
               <div style={{ marginTop: '0.75rem' }}>
@@ -219,7 +266,7 @@ export default function App() {
         <div style={{ textAlign: 'center', marginBottom: '1.2rem' }}>
           <button
             style={canCalculate ? S.btn : S.btnDisabled}
-            onClick={handleCalculate}
+            onClick={() => handleCalculate()}
             disabled={!canCalculate}
           >
             Calculate Discounts
